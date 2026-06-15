@@ -1,0 +1,21 @@
+name: Deploy Image
+on:
+  workflow_run:
+    workflows: ["Build Image"]
+    types:
+      - completed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: 'redis-api-webapp'
+          images: '${{ secrets.DOCKERHUB_USERNAME }}/redis-api:latest'

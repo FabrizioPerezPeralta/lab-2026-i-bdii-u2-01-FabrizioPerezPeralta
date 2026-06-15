@@ -1,0 +1,13 @@
+name: Deploy DB
+on: [workflow_dispatch]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Redis CLI
+        run: sudo apt-get update && sudo apt-get install -y redis-tools
+
+      - name: Populate Redis
+        run: |
+          redis-cli -h ${{ secrets.REDIS_HOST }} -p 6380 -a ${{ secrets.REDIS_PASSWORD }} --tls set "init_key" "init_value"
