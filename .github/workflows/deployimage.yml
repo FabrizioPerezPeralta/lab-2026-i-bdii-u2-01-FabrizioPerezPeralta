@@ -17,5 +17,5 @@ jobs:
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
-          app-name: 'redis-api-webapp'
+          app-name: 'redis-api-webapp-fperez'
           images: '${{ secrets.DOCKERHUB_USERNAME }}/redis-api:latest'
