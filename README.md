@@ -238,26 +238,200 @@ public async Task<IActionResult> ClearCache(string key)
 ## Actividades Encargadas
 1. Genere el archivo Dockerfile para dockerizar el API creado.
    - **Completado.** El archivo `Dockerfile` ha sido creado en la raíz del proyecto.
+   **Código de `Dockerfile`:**
+   ```dockerfile
+   FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+   WORKDIR /src
+   COPY ["App.Redis.Api/App.Redis.Api.csproj", "App.Redis.Api/"]
+   RUN dotnet restore "App.Redis.Api/App.Redis.Api.csproj"
+   COPY . .
+   WORKDIR "/src/App.Redis.Api"
+   RUN dotnet build "App.Redis.Api.csproj" -c Release -o /app/build
+
+   FROM build AS publish
+   RUN dotnet publish "App.Redis.Api.csproj" -c Release -o /app/publish
+
+   FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
+   WORKDIR /app
+   EXPOSE 80
+   COPY --from=publish /app/publish .
+   ENTRYPOINT ["dotnet", "App.Redis.Api.dll"]
+   ```
    ![Captura 1 - Dockerfile](./capturas/actividad1.png)
 
 2. Genere el archivo main.tf dentro de la carpeta infra, para crear mediante Terraform la infrastructura, en Redis (https://redis.io/) y el backend en un servicio Azure AppService u otro servicio Saas que maneje contenedores
    - **Completado.** El archivo `main.tf` ha sido creado en la carpeta `infra/`.
+   **Código de `infra/main.tf`:**
+   ```hcl
+   provider "azurerm" {
+     features {}
+   }
+
+   resource "azurerm_resource_group" "rg" {
+     name     = "redis-api-rg"
+     location = "East US"
+   }
+
+   resource "azurerm_redis_cache" "redis" {
+     name                = "redis-api-cache-fperez"
+     location            = azurerm_resource_group.rg.location
+     resource_group_name = azurerm_resource_group.rg.name
+     capacity            = 0
+     family              = "C"
+     sku_name            = "Basic"
+     non_ssl_port_enabled = false
+     minimum_tls_version = "1.2"
+   }
+
+   resource "azurerm_service_plan" "plan" {
+     name                = "redis-api-appserviceplan"
+     location            = azurerm_resource_group.rg.location
+     resource_group_name = azurerm_resource_group.rg.name
+     os_type             = "Linux"
+     sku_name            = "B1"
+   }
+
+   resource "azurerm_linux_web_app" "app" {
+     name                = "redis-api-webapp-fperez"
+     location            = azurerm_resource_group.rg.location
+     resource_group_name = azurerm_resource_group.rg.name
+     service_plan_id     = azurerm_service_plan.plan.id
+
+     site_config {
+       application_stack {
+         docker_image_name     = "DOCKERHUB_USERNAME/redis-api:latest"
+         docker_registry_url   = "https://index.docker.io/v1/"
+       }
+     }
+
+     app_settings = {
+       "REDIS_CONNECTION_STRING" = azurerm_redis_cache.redis.primary_connection_string
+     }
+   }
+   ```
    ![Captura 2 - Infraestructura Terraform](./capturas/actividad2.png)
 
 3. Genere la automatizacion infra.yml, que despliegue la infraestrutura.
    - **Completado.** El workflow `infra.yml` ha sido creado en `.github/workflows/`.
+   **Código de `infra.yml`:**
+   ```yaml
+   name: Deploy Infrastructure
+   on:
+     push:
+       paths:
+         - 'infra/**'
+     workflow_dispatch:
+
+   jobs:
+     terraform:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v3
+
+         - name: Setup Terraform
+           uses: hashicorp/setup-terraform@v2
+
+         - name: Terraform Init
+           run: terraform init
+           working-directory: ./infra
+
+         - name: Terraform Plan
+           run: terraform plan
+           working-directory: ./infra
+           env:
+             ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+             ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+             ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+             ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+
+         - name: Terraform Apply
+           run: terraform apply -auto-approve
+           working-directory: ./infra
+           env:
+             ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+             ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+             ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+             ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+   ```
    ![Captura 3 - Workflow Infraestructura](./capturas/actividad3.png)
 
 4. Genere la automatización deploydb.yml, que permita cargar datos en su base de datos Redis.
    - **Completado.** El workflow `deploydb.yml` ha sido creado en `.github/workflows/`.
+   **Código de `deploydb.yml`:**
+   ```yaml
+   name: Deploy DB
+   on: [workflow_dispatch]
+
+   jobs:
+     deploy:
+       runs-on: ubuntu-latest
+       steps:
+         - name: Install Redis CLI
+           run: sudo apt-get update && sudo apt-get install -y redis-tools
+
+         - name: Populate Redis
+           run: |
+             redis-cli -h ${{ secrets.REDIS_HOST }} -p 6380 -a ${{ secrets.REDIS_PASSWORD }} --tls set "init_key" "init_value"
+   ```
    ![Captura 4 - Workflow Deploy DB](./capturas/actividad4.png)
 
 5. Genere la automatizacion buildimage.yml para construir la imagen y publicarla como paquete en su repositorio.
    - **Completado.** El workflow `buildimage.yml` ha sido creado en `.github/workflows/`.
+   **Código de `buildimage.yml`:**
+   ```yaml
+   name: Build Image
+   on:
+     push:
+       branches: [ "main" ]
+
+   jobs:
+     build:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v3
+
+         - name: Set up Docker Buildx
+           uses: docker/setup-buildx-action@v2
+
+         - name: Login to DockerHub
+           uses: docker/login-action@v2
+           with:
+             username: ${{ secrets.DOCKERHUB_USERNAME }}
+             password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+         - name: Build and push
+           uses: docker/build-push-action@v4
+           with:
+             context: .
+             push: true
+             tags: ${{ secrets.DOCKERHUB_USERNAME }}/redis-api:latest
+   ```
    ![Captura 5 - Workflow Build Image](./capturas/actividad5.png)
 
 6. Genere la automatizacion deployimage.yml que despliege la imagen previamente publicada en el servicio Web que maneje contenedores.
    - **Completado.** El workflow `deployimage.yml` ha sido creado en `.github/workflows/`.
-   ![Captura 6 - Workflow Deploy Image](./capturas/actividad6.png)
+   **Código de `deployimage.yml`:**
+   ```yaml
+   name: Deploy Image
+   on:
+     workflow_run:
+       workflows: ["Build Image"]
+       types:
+         - completed
 
-> **Nota:** Por favor, asegúrate de reemplazar las imágenes en la carpeta `capturas/` con tus propias capturas de pantalla reales antes de enviar tu tarea (por ejemplo `capturas/actividad1.png`).
+   jobs:
+     deploy:
+       runs-on: ubuntu-latest
+       steps:
+         - name: Azure Login
+           uses: azure/login@v1
+           with:
+             creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+         - name: Deploy to Azure Web App
+           uses: azure/webapps-deploy@v2
+           with:
+             app-name: 'redis-api-webapp-fperez'
+             images: '${{ secrets.DOCKERHUB_USERNAME }}/redis-api:latest'
+   ```
+   ![Captura 6 - Workflow Deploy Image](./capturas/actividad6.png)
